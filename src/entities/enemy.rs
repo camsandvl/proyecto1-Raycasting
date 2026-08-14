@@ -3,9 +3,20 @@
 //! recalculado cada N frames (no cada frame, por rendimiento), y estado visual
 //! (normal/enfurecido) según el % de vida del jugador. Ver SKILL.md, sección
 //! "Mecánica principal: sobrevivir al enemigo".
+//!
+//! Dos reglas de comportamiento (inspiradas en Weeping Angels/SCP-173 y en el
+//! Nemesis asomándose por una puerta) hacen que la persecución se sienta más
+//! amenazante que un simple "camina en línea recta hacia vos":
+//! - **Se congela si lo estás mirando** (mismo cono de FOV + línea de vista que
+//!   se renderiza en pantalla): solo avanza cuando le das la espalda.
+//! - **Pausa al llegar a un cruce real** (3+ salidas): un segundo "decidiendo"
+//!   antes de comprometerse a un pasillo, como si estuviera olfateando.
+//! Combinadas, producen el efecto de "se asoma y se queda quieto mirándote" en
+//! los cruces sin necesidad de programar esa escena a mano.
 
 use std::collections::VecDeque;
 
+use crate::engine::{camera, raycasting};
 use crate::entities::player::Player;
 use crate::map::{Map, BLOCK_SIZE};
 
@@ -27,6 +38,9 @@ pub const PATHFIND_RECALC_FRAMES: u32 = 18;
 /// estado se lea inequívocamente como animación (ver SKILL.md).
 const ANIM_INTERVAL_SECS: f64 = 0.35;
 
+/// Cuánto se queda quieto "decidiendo" al llegar a un cruce con 3+ salidas.
+const JUNCTION_PAUSE_SECS: f64 = 1.2;
+
 const UNREACHABLE: u32 = u32::MAX;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -42,6 +56,14 @@ pub struct Enemy {
     distance_field: Box<[[u32; BLOCK_SIZE]; BLOCK_SIZE]>,
     anim_timer: f64,
     anim_flip: bool,
+    /// Tiempo restante de la pausa "decidiendo" en un cruce (ver JUNCTION_PAUSE_SECS).
+    pause_timer: f64,
+    /// ¿Estaba parado en un cruce el frame pasado? Para detectar la llegada
+    /// (transición) y no reiniciar la pausa cada frame mientras sigue ahí.
+    was_at_junction: bool,
+    /// Expuesto para HUD/depuración y para que el sprite pueda reaccionar
+    /// distinto si algún día se anima "mirando fijo" vs "caminando".
+    pub frozen_by_gaze: bool,
 }
 
 impl Enemy {
@@ -54,6 +76,9 @@ impl Enemy {
             distance_field: Box::new([[UNREACHABLE; BLOCK_SIZE]; BLOCK_SIZE]),
             anim_timer: 0.0,
             anim_flip: false,
+            pause_timer: 0.0,
+            was_at_junction: false,
+            frozen_by_gaze: false,
         }
     }
 
@@ -91,6 +116,30 @@ impl Enemy {
         if self.frames_since_recalc >= recalc_interval_frames {
             self.recalc_path(player);
             self.frames_since_recalc = 0;
+        }
+
+        // Regla 1: si el jugador lo puede ver ahora mismo (mismo cono de FOV +
+        // línea de vista que se renderiza en pantalla), se queda inmóvil —
+        // mirar hacia otro lado es lo único que le permite seguir avanzando.
+        self.frozen_by_gaze = camera::is_within_fov(player, self.x, self.y)
+            && raycasting::has_line_of_sight(player.x, player.y, self.x, self.y);
+        if self.frozen_by_gaze {
+            return;
+        }
+
+        // Regla 2: pausa breve al llegar (recién) a un cruce real (3+ salidas)
+        // — como si estuviera decidiendo hacia dónde ir.
+        let row = (self.y as usize).min(BLOCK_SIZE - 1);
+        let col = (self.x as usize).min(BLOCK_SIZE - 1);
+        let at_junction = is_junction(row, col);
+        if at_junction && !self.was_at_junction {
+            self.pause_timer = JUNCTION_PAUSE_SECS;
+        }
+        self.was_at_junction = at_junction;
+
+        if self.pause_timer > 0.0 {
+            self.pause_timer -= dt;
+            return;
         }
 
         self.step_towards_player(dt);
@@ -196,4 +245,11 @@ fn neighbors(row: usize, col: usize) -> impl Iterator<Item = (usize, usize)> {
     let candidates =
         [(row.wrapping_sub(1), col), (row + 1, col), (row, col.wrapping_sub(1)), (row, col + 1)];
     candidates.into_iter().filter(|&(r, c)| r < BLOCK_SIZE && c < BLOCK_SIZE)
+}
+
+/// ¿Es (row, col) un cruce real (3 o más salidas abiertas)? Una esquina simple
+/// (2 salidas en ángulo) no cuenta — ahí solo hay un camino posible, no hay
+/// nada que "decidir".
+fn is_junction(row: usize, col: usize) -> bool {
+    neighbors(row, col).filter(|&(r, c)| !Map::is_solid_idx(r as isize, c as isize)).count() >= 3
 }

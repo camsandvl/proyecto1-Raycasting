@@ -26,6 +26,22 @@ pub fn camera_view(player: &Player) -> CameraView {
     CameraView { dir_x, dir_y, plane_x, plane_y }
 }
 
+/// ¿Cae `(target_x, target_y)` dentro del mismo cono de visión que se
+/// renderiza en pantalla? Usado para exigir que el enemigo esté realmente a
+/// la vista antes de poder hacer daño — ver uso en main.rs.
+pub fn is_within_fov(player: &Player, target_x: f64, target_y: f64) -> bool {
+    let dx = target_x - player.x;
+    let dy = target_y - player.y;
+    let dist_sq = dx * dx + dy * dy;
+    if dist_sq < 1e-9 {
+        return true;
+    }
+    let dist = dist_sq.sqrt();
+    let (dir_x, dir_y) = player.dir();
+    let dot = (dx / dist) * dir_x + (dy / dist) * dir_y;
+    dot >= (FOV / 2.0).cos()
+}
+
 /// Aplica el estado del teclado (W/S mover, A/D rotar) al jugador para este frame.
 /// `dt` en segundos.
 pub fn apply_keyboard(player: &mut Player, keys: &KeyboardState, dt: f64) {

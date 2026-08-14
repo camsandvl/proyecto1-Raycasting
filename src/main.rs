@@ -96,6 +96,9 @@ fn main() -> Result<(), String> {
 
             // Daño por contacto: mientras el enemigo esté en rango, la vida baja
             // de forma continua (no es game over instantáneo) — ver SKILL.md.
+            // Omnidireccional a propósito (igual que la gran mayoría del género):
+            // que te pueda alcanzar sin que estés mirando es justamente lo que
+            // genera la tensión de "¿estará detrás mío?".
             let in_contact = enemy.distance_to_player(&player) < CONTACT_RANGE;
             if in_contact {
                 player.apply_damage(DAMAGE_PER_SECOND * dt);

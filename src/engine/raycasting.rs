@@ -101,3 +101,23 @@ pub fn cast_ray(pos_x: f64, pos_y: f64, dir_x: f64, dir_y: f64) -> Option<RayHit
 
     None
 }
+
+/// ¿Hay línea de vista despejada entre dos puntos (sin pared sólida en medio)?
+/// Usado para exigir que el jugador realmente pueda ver al enemigo antes de
+/// que este pueda herirlo — ver `engine::camera::is_within_fov` y su uso en
+/// main.rs: la persecución debe sentirse inminente porque se ve venir, no
+/// como una emboscada invisible por detrás de la cámara.
+pub fn has_line_of_sight(from_x: f64, from_y: f64, to_x: f64, to_y: f64) -> bool {
+    let dx = to_x - from_x;
+    let dy = to_y - from_y;
+    let dist = (dx * dx + dy * dy).sqrt();
+    if dist < 1e-6 {
+        return true;
+    }
+    match cast_ray(from_x, from_y, dx / dist, dy / dist) {
+        // Margen chico: no contar el propio bloque en el que está parado el
+        // objetivo como si fuera una pared tapándolo.
+        Some(hit) => hit.perp_dist >= dist - 0.2,
+        None => true,
+    }
+}
