@@ -172,12 +172,38 @@ fn main() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let mut floor_buffer = vec![0u8; (SCREEN_WIDTH * floor_h * 3) as usize];
 
-    // Textura de pared — placeholder compartido por Recibidor/Dormitorio/Sala
-    // hasta que Cami entregue las 3 texturas finales, una por zona (ver
-    // SKILL.md, "Texturas de pared"). La Cocina no usa textura: color plano
-    // generado por código.
-    let mut wall_texture = texture_creator
-        .load_texture("assets/textures/wallpaper.png")
+    // Texturas de pared de la zona Normal — wallpaper base (índice 0) +
+    // variaciones (manchas/marcas) mezcladas al azar por bloque, ver
+    // render::walls::scatter_variant_index. Todo el apartamento es la misma
+    // familia de wallpaper ahora, no una textura distinta por "cuarto" (ver
+    // SKILL.md, "Texturas de pared").
+    let mut normal_wall_textures = [
+        "assets/textures/wallpaper.png",
+        "assets/textures/wallpaper_variant_02.png",
+        "assets/textures/wallpaper_variant_04.png",
+        "assets/textures/wallpaper_variant_06.png",
+        "assets/textures/wallpaper_variant_08.png",
+        "assets/textures/wallpaper_variant_09.png",
+        "assets/textures/wallpaper_variant_10.png",
+        "assets/textures/wallpaper_variant_11.png",
+        "assets/textures/wallpaper_variant_12.png",
+        "assets/textures/wallpaper_variant_13.png",
+        "assets/textures/wallpaper_variant_14.png",
+        "assets/textures/wallpaper_variant_15.png",
+        "assets/textures/wallpaper_variant_16.png",
+        "assets/textures/wallpaper_variant_17.png",
+        "assets/textures/wallpaper_variant_18.png",
+        "assets/textures/wallpaper_variant_19.png",
+        "assets/textures/wallpaper_variant_20.png",
+        "assets/textures/wallpaper_variant_21.png",
+    ]
+    .into_iter()
+    .map(|path| texture_creator.load_texture(path).map_err(|e| e.to_string()))
+    .collect::<Result<Vec<_>, String>>()?;
+
+    // Textura de la zona Drip (vieja "Cocina") — sin mezcla, siempre esta sola.
+    let mut drip_wall_texture = texture_creator
+        .load_texture("assets/textures/wallpaper_drip.png")
         .map_err(|e| e.to_string())?;
 
     // Textura de piso — leída a memoria de CPU (no un Texture de GPU) para
@@ -280,7 +306,8 @@ fn main() -> Result<(), String> {
                     &mut floor_texture,
                     &mut floor_buffer,
                     &floor_tex,
-                    &mut wall_texture,
+                    &mut normal_wall_textures,
+                    &mut drip_wall_texture,
                     &mut z_buffer,
                     &run,
                     &fps_counter,
@@ -350,7 +377,7 @@ fn update_playing(run: &mut RunState, event_pump: &sdl2::EventPump, audio_engine
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_playing(
+fn draw_playing<'t>(
     canvas: &mut Canvas<Window>,
     texture_creator: &TextureCreator<WindowContext>,
     hud_font: &sdl2::ttf::Font,
@@ -358,12 +385,24 @@ fn draw_playing(
     floor_texture: &mut Texture,
     floor_buffer: &mut [u8],
     floor_tex: &render::walls::PixelTexture,
-    wall_texture: &mut Texture,
+    normal_wall_textures: &mut [Texture<'t>],
+    drip_wall_texture: &mut Texture<'t>,
     z_buffer: &mut [f64],
     run: &RunState,
     fps_counter: &FpsCounter,
 ) {
-    render::walls::render_scene(canvas, floor_texture, floor_buffer, floor_tex, wall_texture, z_buffer, &run.player, SCREEN_WIDTH, SCREEN_HEIGHT);
+    render::walls::render_scene(
+        canvas,
+        floor_texture,
+        floor_buffer,
+        floor_tex,
+        normal_wall_textures,
+        drip_wall_texture,
+        z_buffer,
+        &run.player,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT,
+    );
     render::sprites::render_enemy(
         canvas,
         &run.player,
@@ -386,6 +425,8 @@ fn draw_playing(
     render::hud::draw_minimap(canvas, &run.player, SCREEN_WIDTH as i32);
     fps_counter.draw(canvas, texture_creator, hud_font);
     render::hud::draw_hearts(canvas, &run.player, 10, 40);
+    let remaining = run.difficulty.survival_seconds() - run.survival_elapsed;
+    render::hud::draw_timer(canvas, texture_creator, hud_font, remaining, SCREEN_WIDTH as i32 / 2, 10);
 
     // "Help is coming" y "This looks like your house..." están secuenciados
     // para no coincidir nunca entre sí (ver HOUSE_LABEL_DELAY). Si el de Erica

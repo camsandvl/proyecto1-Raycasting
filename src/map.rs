@@ -30,18 +30,19 @@ pub struct Walls {
     pub w: bool,
 }
 
-/// Zona temática del apartamento (ver SKILL.md, sección "Ambientación y arte").
-/// Determina qué textura de pared se usa.
+/// Zona del apartamento (ver SKILL.md, sección "Ambientación y arte"). Ya no
+/// hay una textura distinta por "cuarto" — todo el apartamento es el mismo
+/// wallpaper con variaciones (manchas/marcas) mezcladas al azar por bloque —
+/// excepto la zona `Drip`, que es 100% una sola variación (`wallpaper_drip.png`),
+/// sin mezcla.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Zone {
-    /// Filas 0-4, columnas 0-4. Spawn del jugador. Wallpaper desgastado (Cami).
-    Recibidor,
-    /// Filas 0-4, columnas 5-9. Cortinas pesadas (Cami).
-    Dormitorio,
-    /// Filas 5-9, columnas 0-4. Wallpaper floral ornamentado (Cami).
-    Sala,
-    /// Filas 5-9, columnas 5-9. Spawn del enemigo. Textura sucia generada por código.
-    Cocina,
+    /// Wallpaper base + variaciones mezcladas al azar por bloque (ver
+    /// `render::walls::scatter_variant_index`).
+    Normal,
+    /// Filas 5-9, columnas 5-9. Spawn del enemigo. Solo `wallpaper_drip.png`,
+    /// sin mezcla — la vieja zona "Cocina" (era la única con textura no-Cami).
+    Drip,
 }
 
 /// Grid `[fila][columna]`, 0-indexado. Fila 0 = arriba, columna 0 = izquierda.
@@ -66,13 +67,12 @@ pub const PLAYER_SPAWN_CELL: (usize, usize) = (0, 0); // (row, col)
 /// Celda de spawn del enemigo (esquina inferior derecha).
 pub const ENEMY_SPAWN_CELL: (usize, usize) = (9, 9); // (row, col)
 
-/// Devuelve la zona temática de una celda ORIGINAL dada (fila, columna).
+/// Devuelve la zona de una celda ORIGINAL dada (fila, columna).
 pub fn zone_of(row: usize, col: usize) -> Zone {
-    match (row < 5, col < 5) {
-        (true, true) => Zone::Recibidor,
-        (true, false) => Zone::Dormitorio,
-        (false, true) => Zone::Sala,
-        (false, false) => Zone::Cocina,
+    if row >= 5 && col >= 5 {
+        Zone::Drip
+    } else {
+        Zone::Normal
     }
 }
 

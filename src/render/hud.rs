@@ -6,7 +6,7 @@ use sdl2::render::{Canvas, TextureCreator};
 use sdl2::ttf::Font;
 use sdl2::video::{Window, WindowContext};
 
-use super::text::draw_text;
+use super::text::{draw_text, draw_text_centered};
 use crate::engine::minimap;
 use crate::entities::player::{Player, MAX_LIFE};
 use crate::map::{BLOCK_GRID, BLOCK_SIZE};
@@ -60,13 +60,13 @@ impl FpsCounter {
 
 const HEART_W: usize = 7;
 const HEART_H: usize = 7;
-const HEART_CELL_PX: i32 = 5;
+const HEART_CELL_PX: i32 = 4;
 const HEART_GAP_PX: i32 = 8;
 const HEARTS_TOTAL: u32 = 5;
 const LIFE_PER_HEART: f64 = MAX_LIFE / HEARTS_TOTAL as f64;
 
-const HEART_COLOR_FULL: Color = Color::RGB(200, 30, 55);
-const HEART_COLOR_CRACKED: Color = Color::RGB(120, 40, 40);
+const HEART_COLOR_FULL: Color = Color::RGB(90, 10, 22);
+const HEART_COLOR_CRACKED: Color = Color::RGB(55, 12, 15);
 
 #[rustfmt::skip]
 const HEART_FULL: [[u8; HEART_W]; HEART_H] = [
@@ -140,6 +140,28 @@ pub fn draw_hearts(canvas: &mut Canvas<Window>, player: &Player, x: i32, y: i32)
             draw_heart_bitmap(canvas, &HEART_CRACKED, hx, y, HEART_COLOR_CRACKED);
         }
     }
+}
+
+const TIMER_COLOR: Color = Color::RGB(210, 205, 195);
+const TIMER_COLOR_LOW: Color = Color::RGB(226, 20, 20); // últimos 10s — mismo rojo de marca.
+const TIMER_LOW_THRESHOLD: f64 = 10.0;
+
+/// Cuenta regresiva de supervivencia, centrada arriba de la pantalla —
+/// `M:SS`. Se pone roja en los últimos 10 segundos como aviso.
+pub fn draw_timer(
+    canvas: &mut Canvas<Window>,
+    texture_creator: &TextureCreator<WindowContext>,
+    font: &Font,
+    remaining_secs: f64,
+    center_x: i32,
+    y: i32,
+) {
+    let secs_total = remaining_secs.max(0.0).ceil() as i32;
+    let minutes = secs_total / 60;
+    let seconds = secs_total % 60;
+    let text = format!("{minutes}:{seconds:02}");
+    let color = if remaining_secs <= TIMER_LOW_THRESHOLD { TIMER_COLOR_LOW } else { TIMER_COLOR };
+    draw_text_centered(canvas, texture_creator, font, &text, center_x, y, color);
 }
 
 /// Dibuja el minimapa (paredes del grid + marcador de jugador con su orientación)

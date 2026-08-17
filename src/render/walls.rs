@@ -2,16 +2,15 @@
 //! real, para que se vea como un plano que retrocede y no un rectángulo plano) y
 //! paredes columna por columna a partir de los impactos del DDA.
 //!
-//! Paredes: Recibidor/Dormitorio/Sala muestrean una textura real (columna de 1px
-//! de ancho de `assets/textures/wallpaper.png`, escalada por GPU al alto de la
-//! franja) usando `RayHit::wall_x` como coordenada U — el sombreado (lado E/W
-//! más oscuro, niebla por distancia) se aplica con `Texture::set_color_mod`
-//! (tinte multiplicativo) en vez de tocar píxeles a mano, así un solo
-//! `canvas.copy` por columna alcanza. La Cocina sigue con color plano generado
-//! por código (no tiene textura de Cami, ver SKILL.md).
-//!
-//! `wallpaper.png` es un placeholder compartido por las 3 zonas hasta que Cami
-//! entregue las 3 texturas finales, una por zona.
+//! Paredes: todo el apartamento es el mismo wallpaper base
+//! (`assets/textures/wallpaper.png`) con variaciones (manchas/marcas)
+//! mezcladas al azar por bloque — ver `scatter_variant_index` — excepto la
+//! zona `Zone::Drip` (vieja "Cocina"), que es 100% `wallpaper_drip.png`, sin
+//! mezcla. Cada columna muestrea una tira de 1px de ancho (columna `wall_x`)
+//! de la textura elegida, escalada por GPU al alto de la franja — el
+//! sombreado (lado E/W más oscuro, niebla por distancia) se aplica con
+//! `Texture::set_color_mod` (tinte multiplicativo) en vez de tocar píxeles a
+//! mano, así un solo `canvas.copy` por columna alcanza.
 //!
 //! Piso: ya no es un checker de dos tonos — muestrea `assets/textures/floor.png`
 //! por píxel (vía `PixelTexture`, acceso a bytes crudos) directo en el mismo
@@ -29,7 +28,7 @@ use sdl2::video::Window;
 use crate::engine::camera::camera_view;
 use crate::engine::raycasting::{cast_ray, RayHit, Side};
 use crate::entities::player::Player;
-use crate::map::Zone;
+use crate::map::{zone_of_block, Map, Zone};
 
 // Techo — degradado liso, casi negro con un dejo amarillento a pedido de Cami.
 pub const CEILING_TOP: (u8, u8, u8) = (3, 2, 0);
@@ -77,28 +76,69 @@ impl PixelTexture {
     }
 }
 
-/// Color base placeholder por zona temática (ver SKILL.md, sección de zonas).
-fn zone_color(zone: Zone) -> (u8, u8, u8) {
-    match zone {
-        Zone::Recibidor => (150, 130, 100), // wallpaper desgastado (Cami)
-        Zone::Dormitorio => (110, 45, 45),  // cortinas pesadas (Cami)
-        Zone::Sala => (75, 90, 60),         // wallpaper floral (Cami)
-        Zone::Cocina => (95, 95, 85),       // sucia/deteriorada (generada)
-    }
-}
-
 fn lerp_u8(a: u8, b: u8, t: f64) -> u8 {
     (a as f64 + (b as f64 - a as f64) * t.clamp(0.0, 1.0)) as u8
 }
 
-/// Sombreado base de pared: E/W (Vertical) a color pleno, N/S (Horizontal) más
-/// oscuras (como en Wolfenstein), atenuadas por distancia (niebla leve).
-fn shaded_color(zone: Zone, side: Side, dist: f64) -> Color {
-    let (r, g, b) = zone_color(zone);
-    let side_factor = if side == Side::Horizontal { 0.65 } else { 1.0 };
-    let fog_factor = (1.0 - (dist / 14.0).min(0.55)).max(0.45);
-    let factor = side_factor * fog_factor;
-    Color::RGB(((r as f64) * factor) as u8, ((g as f64) * factor) as u8, ((b as f64) * factor) as u8)
+/// Cambia este número para "volver a tirar los dados" — reordena qué bloque
+/// obtiene qué variación en todo el mapa (mismo bloque, mismo resultado
+/// siempre para un `SCATTER_SEED` dado, pero cambiarlo mezcla todo de nuevo).
+/// Útil si algún bloque puntual (ej. justo donde aparece el jugador) queda
+/// con una variación que no convence.
+const SCATTER_SEED: u64 = 2;
+
+/// Hash simple y determinístico de coordenadas de bloque — mismo bloque
+/// siempre da el mismo valor (no parpadea entre frames), pero valores vecinos
+/// no guardan un patrón visible. Variante de MurmurHash3's finalizer.
+fn hash_block(row: u64, col: u64) -> u64 {
+    let mut h = row.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ col.wrapping_mul(0xC2B2_AE3D_27D4_EB4F) ^ SCATTER_SEED;
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xC4CE_B9FE_1A85_EC53);
+    h ^= h >> 33;
+    h
+}
+
+/// `VARIANT_CHANCE_HITS` de cada `VARIANT_CHANCE_OUT_OF` bloques "quieren" una
+/// variación (antes de chequear vecinos) — hoy 6 de cada 10 (60%). Subir
+/// `VARIANT_CHANCE_HITS` las hace más frecuentes, bajarlo más raras.
+const VARIANT_CHANCE_OUT_OF: u64 = 10;
+const VARIANT_CHANCE_HITS: u64 = 6;
+
+/// ¿El bloque (row, col) "quiere" una variación, antes de chequear vecinos?
+/// Solo una tirada de dado determinística — mismo bloque, mismo resultado
+/// siempre (no parpadea entre frames).
+fn wants_variant(row: usize, col: usize) -> bool {
+    hash_block(row as u64, col as u64) % VARIANT_CHANCE_OUT_OF < VARIANT_CHANCE_HITS
+}
+
+/// Elige qué textura de `normal_textures` pintar en el bloque (row, col) de
+/// la zona `Zone::Normal` — índice 0 es el wallpaper base, 1..len son las
+/// variaciones (manchas/marcas). La mayoría de los bloques son wallpaper
+/// base; de vez en cuando uno "quiere" una variación (`wants_variant`), pero
+/// solo la consigue si el vecino de arriba y el de la izquierda no se
+/// quedaron ya con una — así nunca quedan dos variaciones pegadas una al
+/// lado de la otra. Un vecino solo cuenta si de verdad va a pintarse como
+/// pared con variación ahí (bloque sólido Y de la zona Normal) — si no, es
+/// piso abierto o parte de la zona Drip y no debería restarle chances a este
+/// bloque, o la frecuencia terminaría pareciendo despareja según el mapa.
+pub fn scatter_variant_index(row: usize, col: usize, total_len: usize) -> usize {
+    if total_len <= 1 || !wants_variant(row, col) {
+        return 0;
+    }
+
+    let earlier_neighbors = [row.checked_sub(1).map(|r| (r, col)), col.checked_sub(1).map(|c| (row, c))];
+    for (nr, nc) in earlier_neighbors.into_iter().flatten() {
+        let is_normal_wall = Map::is_solid_idx(nr as isize, nc as isize) && zone_of_block(nr, nc) == Zone::Normal;
+        if is_normal_wall && wants_variant(nr, nc) {
+            return 0; // ese vecino ya se quedó con la variación de esta zona.
+        }
+    }
+
+    let variant_count = (total_len - 1) as u64;
+    let h = hash_block(row as u64, col as u64);
+    1 + (h % variant_count) as usize
 }
 
 /// Dibuja el techo como un degradado vertical simple (spec permite "colores
@@ -179,12 +219,20 @@ fn render_floor(
 
 /// Dibuja las paredes y llena `z_buffer` con la distancia perpendicular de
 /// cada columna — el sprite del enemigo (render::sprites) lo usa para saber
-/// qué columnas están tapadas por una pared más cercana.
-fn render_walls(canvas: &mut Canvas<Window>, wall_texture: &mut Texture, player: &Player, z_buffer: &mut [f64], w: i32, h: i32) {
+/// qué columnas están tapadas por una pared más cercana. `normal_textures[0]`
+/// es el wallpaper base, el resto son las variaciones mezcladas al azar por
+/// bloque (ver `scatter_variant_index`); `drip_texture` es la única textura
+/// de la zona `Zone::Drip`.
+fn render_walls<'t>(
+    canvas: &mut Canvas<Window>,
+    normal_textures: &mut [Texture<'t>],
+    drip_texture: &mut Texture<'t>,
+    player: &Player,
+    z_buffer: &mut [f64],
+    w: i32,
+    h: i32,
+) {
     let view = camera_view(player);
-    let tex_query = wall_texture.query();
-    let tex_w = tex_query.width as i32;
-    let tex_h = tex_query.height as i32;
 
     for x in 0..w {
         // camera_x barre de -1 (borde izq.) a 1 (borde der.) de la pantalla.
@@ -204,13 +252,16 @@ fn render_walls(canvas: &mut Canvas<Window>, wall_texture: &mut Texture, player:
         let draw_end = (line_height / 2 + h / 2).min(h - 1);
         let total_h = (draw_end - draw_start).max(1);
 
-        if hit.zone == Zone::Cocina {
-            // Sin textura de Cami — se queda con el color plano generado por código.
-            let color = shaded_color(hit.zone, hit.side, hit.perp_dist);
-            canvas.set_draw_color(color);
-            let _ = canvas.fill_rect(Rect::new(x, draw_start, 1, total_h as u32));
-            continue;
-        }
+        let texture = match hit.zone {
+            Zone::Drip => &mut *drip_texture,
+            Zone::Normal => {
+                let idx = scatter_variant_index(hit.block_row, hit.block_col, normal_textures.len());
+                &mut normal_textures[idx]
+            }
+        };
+        let tex_query = texture.query();
+        let tex_w = tex_query.width as i32;
+        let tex_h = tex_query.height as i32;
 
         // Textura real: una tira de 1px de ancho de la columna `wall_x` de la
         // textura, escalada por GPU al alto de la franja. El sombreado (lado
@@ -223,17 +274,19 @@ fn render_walls(canvas: &mut Canvas<Window>, wall_texture: &mut Texture, player:
         let src_x = ((hit.wall_x * tex_w as f64) as i32).clamp(0, tex_w - 1);
         let src = Rect::new(src_x, 0, 1, tex_h as u32);
         let dest = Rect::new(x, draw_start, 1, total_h as u32);
-        wall_texture.set_color_mod(shade, shade, shade);
-        let _ = canvas.copy(wall_texture, Some(src), Some(dest));
+        texture.set_color_mod(shade, shade, shade);
+        let _ = canvas.copy(texture, Some(src), Some(dest));
     }
 }
 
-pub fn render_scene(
+#[allow(clippy::too_many_arguments)]
+pub fn render_scene<'t>(
     canvas: &mut Canvas<Window>,
     floor_texture: &mut Texture,
     floor_buffer: &mut [u8],
     floor_tex: &PixelTexture,
-    wall_texture: &mut Texture,
+    normal_wall_textures: &mut [Texture<'t>],
+    drip_wall_texture: &mut Texture<'t>,
     z_buffer: &mut [f64],
     player: &Player,
     screen_w: u32,
@@ -244,5 +297,5 @@ pub fn render_scene(
 
     render_ceiling(canvas, w, h);
     render_floor(canvas, floor_texture, floor_buffer, floor_tex, player, w, h);
-    render_walls(canvas, wall_texture, player, z_buffer, w, h);
+    render_walls(canvas, normal_wall_textures, drip_wall_texture, player, z_buffer, w, h);
 }
