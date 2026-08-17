@@ -2,13 +2,28 @@
 //! real, para que se vea como un plano que retrocede y no un rectángulo plano) y
 //! paredes columna por columna a partir de los impactos del DDA.
 //!
-//! Fase 1/2: color plano por zona + sombreado de "panel" (placeholder). Fase 4
-//! reemplaza `zone_color` por muestreo real de textura (PNGs de Cami + generada
-//! por código para la Cocina) usando `RayHit::wall_x` como coordenada U.
+//! Paredes: Recibidor/Dormitorio/Sala muestrean una textura real (columna de 1px
+//! de ancho de `assets/textures/wallpaper.png`, escalada por GPU al alto de la
+//! franja) usando `RayHit::wall_x` como coordenada U — el sombreado (lado E/W
+//! más oscuro, niebla por distancia) se aplica con `Texture::set_color_mod`
+//! (tinte multiplicativo) en vez de tocar píxeles a mano, así un solo
+//! `canvas.copy` por columna alcanza. La Cocina sigue con color plano generado
+//! por código (no tiene textura de Cami, ver SKILL.md).
+//!
+//! `wallpaper.png` es un placeholder compartido por las 3 zonas hasta que Cami
+//! entregue las 3 texturas finales, una por zona.
+//!
+//! Piso: ya no es un checker de dos tonos — muestrea `assets/textures/floor.png`
+//! por píxel (vía `PixelTexture`, acceso a bytes crudos) directo en el mismo
+//! buffer del floor-casting, una vez por celda de mundo (1×1, tileable).
+//! Techo: sigue siendo degradado liso por código (`CEILING_TOP`/`CEILING_HORIZON`),
+//! no textura — cambiar esos dos colores alcanza para recolorearlo.
 
-use sdl2::pixels::Color;
+use sdl2::image::LoadSurface;
+use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::Rect;
 use sdl2::render::{Canvas, Texture};
+use sdl2::surface::Surface;
 use sdl2::video::Window;
 
 use crate::engine::camera::camera_view;
@@ -16,15 +31,51 @@ use crate::engine::raycasting::{cast_ray, RayHit, Side};
 use crate::entities::player::Player;
 use crate::map::Zone;
 
-pub const CEILING_TOP: (u8, u8, u8) = (14, 12, 16);
-pub const CEILING_HORIZON: (u8, u8, u8) = (34, 28, 34);
+// Techo — degradado liso, casi negro con un dejo amarillento a pedido de Cami.
+pub const CEILING_TOP: (u8, u8, u8) = (3, 2, 0);
+pub const CEILING_HORIZON: (u8, u8, u8) = (12, 10, 3);
 
-// Piso: dos tonos cercanos (madera/loseta vieja) en vez de blanco/negro de
-// tablero de ajedrez — encaja mejor con el flat europeo sombrío.
-const FLOOR_A: (u8, u8, u8) = (46, 38, 32);
-const FLOOR_B: (u8, u8, u8) = (58, 48, 40);
+/// Textura leída a memoria de CPU (RGB24 sin padding) para poder muestrear
+/// píxel a píxel dentro del loop de floor-casting, en vez de un `Texture` de
+/// GPU (que no se puede leer directo). Se carga una sola vez al arrancar.
+pub struct PixelTexture {
+    w: i32,
+    h: i32,
+    pixels: Vec<u8>,
+}
 
-const BASEBOARD_FACTOR: f64 = 0.5; // franja inferior (zócalo)
+impl PixelTexture {
+    pub fn load(path: &str) -> Result<Self, String> {
+        let surface = Surface::from_file(path)?;
+        let surface = surface.convert_format(PixelFormatEnum::RGB24)?;
+        let w = surface.width() as i32;
+        let h = surface.height() as i32;
+        let pitch = surface.pitch() as usize;
+        let row_bytes = w as usize * 3;
+        let mut pixels = vec![0u8; row_bytes * h as usize];
+        surface.with_lock(|src| {
+            for y in 0..h as usize {
+                let src_row = &src[y * pitch..y * pitch + row_bytes];
+                let dst_row = &mut pixels[y * row_bytes..(y + 1) * row_bytes];
+                dst_row.copy_from_slice(src_row);
+            }
+        });
+        Ok(PixelTexture { w, h, pixels })
+    }
+
+    /// Muestrea el color en coordenadas `u`, `v` (se envuelven a 0.0-1.0 solas,
+    /// no hace falta que el llamador las recorte — así una celda de mundo
+    /// cualquiera, positiva o negativa, tilea sin costuras).
+    #[inline]
+    fn sample(&self, u: f64, v: f64) -> (u8, u8, u8) {
+        let uu = u.rem_euclid(1.0);
+        let vv = v.rem_euclid(1.0);
+        let tx = ((uu * self.w as f64) as i32).clamp(0, self.w - 1) as usize;
+        let ty = ((vv * self.h as f64) as i32).clamp(0, self.h - 1) as usize;
+        let idx = (ty * self.w as usize + tx) * 3;
+        (self.pixels[idx], self.pixels[idx + 1], self.pixels[idx + 2])
+    }
+}
 
 /// Color base placeholder por zona temática (ver SKILL.md, sección de zonas).
 fn zone_color(zone: Zone) -> (u8, u8, u8) {
@@ -38,10 +89,6 @@ fn zone_color(zone: Zone) -> (u8, u8, u8) {
 
 fn lerp_u8(a: u8, b: u8, t: f64) -> u8 {
     (a as f64 + (b as f64 - a as f64) * t.clamp(0.0, 1.0)) as u8
-}
-
-fn darken(color: Color, factor: f64) -> Color {
-    Color::RGB((color.r as f64 * factor) as u8, (color.g as f64 * factor) as u8, (color.b as f64 * factor) as u8)
 }
 
 /// Sombreado base de pared: E/W (Vertical) a color pleno, N/S (Horizontal) más
@@ -76,7 +123,15 @@ fn render_ceiling(canvas: &mut Canvas<Window>, w: i32, h: i32) {
 /// pintar un patrón a cuadros que efectivamente se encoge hacia el horizonte —
 /// es lo que le da la sensación de piso real en perspectiva (ver nota de Cami:
 /// sin esto el piso se ve como un rectángulo plano y "la ilusión se rompe").
-fn render_floor(canvas: &mut Canvas<Window>, texture: &mut Texture, buffer: &mut [u8], player: &Player, w: i32, h: i32) {
+fn render_floor(
+    canvas: &mut Canvas<Window>,
+    texture: &mut Texture,
+    buffer: &mut [u8],
+    floor_tex: &PixelTexture,
+    player: &Player,
+    w: i32,
+    h: i32,
+) {
     let view = camera_view(player);
     let horizon = h / 2;
     let floor_h = h - horizon;
@@ -106,10 +161,7 @@ fn render_floor(canvas: &mut Canvas<Window>, texture: &mut Texture, buffer: &mut
         let row_offset = (y as usize) * pitch;
 
         for x in 0..w as usize {
-            let cell_x = floor_x.floor() as i64;
-            let cell_y = floor_y.floor() as i64;
-            let checker = (cell_x.wrapping_add(cell_y)) & 1;
-            let base = if checker == 0 { FLOOR_A } else { FLOOR_B };
+            let base = floor_tex.sample(floor_x, floor_y);
 
             let idx = row_offset + x * 3;
             buffer[idx] = (base.0 as f64 * fog) as u8;
@@ -128,8 +180,11 @@ fn render_floor(canvas: &mut Canvas<Window>, texture: &mut Texture, buffer: &mut
 /// Dibuja las paredes y llena `z_buffer` con la distancia perpendicular de
 /// cada columna — el sprite del enemigo (render::sprites) lo usa para saber
 /// qué columnas están tapadas por una pared más cercana.
-fn render_walls(canvas: &mut Canvas<Window>, player: &Player, z_buffer: &mut [f64], w: i32, h: i32) {
+fn render_walls(canvas: &mut Canvas<Window>, wall_texture: &mut Texture, player: &Player, z_buffer: &mut [f64], w: i32, h: i32) {
     let view = camera_view(player);
+    let tex_query = wall_texture.query();
+    let tex_w = tex_query.width as i32;
+    let tex_h = tex_query.height as i32;
 
     for x in 0..w {
         // camera_x barre de -1 (borde izq.) a 1 (borde der.) de la pantalla.
@@ -149,17 +204,27 @@ fn render_walls(canvas: &mut Canvas<Window>, player: &Player, z_buffer: &mut [f6
         let draw_end = (line_height / 2 + h / 2).min(h - 1);
         let total_h = (draw_end - draw_start).max(1);
 
-        let color = shaded_color(hit.zone, hit.side, hit.perp_dist);
-        canvas.set_draw_color(color);
-        let _ = canvas.fill_rect(Rect::new(x, draw_start, 1, total_h as u32));
-
-        // Zócalo: ancla la pared al piso con una franja más oscura, como en un
-        // cuarto real, en vez de flotar como un plano liso.
-        if total_h > 10 {
-            let base_h = ((total_h as f64) * 0.08).ceil().max(1.0) as i32;
-            canvas.set_draw_color(darken(color, BASEBOARD_FACTOR));
-            let _ = canvas.fill_rect(Rect::new(x, draw_end - base_h, 1, base_h as u32));
+        if hit.zone == Zone::Cocina {
+            // Sin textura de Cami — se queda con el color plano generado por código.
+            let color = shaded_color(hit.zone, hit.side, hit.perp_dist);
+            canvas.set_draw_color(color);
+            let _ = canvas.fill_rect(Rect::new(x, draw_start, 1, total_h as u32));
+            continue;
         }
+
+        // Textura real: una tira de 1px de ancho de la columna `wall_x` de la
+        // textura, escalada por GPU al alto de la franja. El sombreado (lado
+        // E/W + niebla por distancia) se aplica como tinte multiplicativo, no
+        // tocando píxeles — barato y sigue siendo un solo `canvas.copy`.
+        let side_factor = if hit.side == Side::Horizontal { 0.65 } else { 1.0 };
+        let fog_factor = (1.0 - (hit.perp_dist / 14.0).min(0.55)).max(0.45);
+        let shade = ((side_factor * fog_factor).clamp(0.0, 1.0) * 255.0) as u8;
+
+        let src_x = ((hit.wall_x * tex_w as f64) as i32).clamp(0, tex_w - 1);
+        let src = Rect::new(src_x, 0, 1, tex_h as u32);
+        let dest = Rect::new(x, draw_start, 1, total_h as u32);
+        wall_texture.set_color_mod(shade, shade, shade);
+        let _ = canvas.copy(wall_texture, Some(src), Some(dest));
     }
 }
 
@@ -167,6 +232,8 @@ pub fn render_scene(
     canvas: &mut Canvas<Window>,
     floor_texture: &mut Texture,
     floor_buffer: &mut [u8],
+    floor_tex: &PixelTexture,
+    wall_texture: &mut Texture,
     z_buffer: &mut [f64],
     player: &Player,
     screen_w: u32,
@@ -176,6 +243,6 @@ pub fn render_scene(
     let h = screen_h as i32;
 
     render_ceiling(canvas, w, h);
-    render_floor(canvas, floor_texture, floor_buffer, player, w, h);
-    render_walls(canvas, player, z_buffer, w, h);
+    render_floor(canvas, floor_texture, floor_buffer, floor_tex, player, w, h);
+    render_walls(canvas, wall_texture, player, z_buffer, w, h);
 }

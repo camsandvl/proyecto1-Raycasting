@@ -1,9 +1,11 @@
-# Ray Caster de Terror
+# Not your house
 
 Proyecto universitario (gráficas por computadora, parte 3): un ray caster estilo
-Wolfenstein 3D ambientado en un flat europeo sombrío, con un enemigo que persigue al
-jugador por un laberinto propio de 10×10. Ver [SKILL.md](SKILL.md) para el diseño
-completo (scope, mecánicas, decisiones cerradas).
+Wolfenstein 3D. Es tu aniversario. Erica, tu novia, ha estado actuando raro. Esta
+no es tu casa.
+
+Ver [SKILL.md](SKILL.md) para el diseño completo (scope, mecánicas, guion narrativo,
+decisiones cerradas).
 
 ## Requisitos
 
@@ -31,12 +33,22 @@ cargo run --release
 
 ## Controles
 
+**Gameplay**
+
 | Tecla | Acción |
 |---|---|
 | W / S | Mover adelante / atrás |
 | A / D | Rotar cámara |
 | Mouse (movimiento horizontal) | Rotación adicional |
 | Esc | Salir |
+
+**Menús**
+
+| Tecla | Acción |
+|---|---|
+| 1 / 2 / 3 | Elegir dificultad (fácil/medio/difícil) en la bienvenida |
+| ENTER | Confirmar / iniciar |
+| R | Reintentar (pantalla de game over) |
 
 ## Estado del proyecto
 
@@ -45,12 +57,16 @@ cargo run --release
       contador de FPS.
 - [x] Fase 2 — Mapa y minimapa: laberinto 10×10 en `src/map.rs` + minimapa en
       la esquina superior derecha.
-- [x] Fase 3 — Enemigo: pathfinding BFS (recalculado cada 18 frames), vida del
-      jugador con daño por contacto, sprite billboard con z-buffer, estado
-      normal/enfurecido (≤50% vida) con parpadeo de 2 frames.
-- [ ] Fase 4 — Integración de arte (Cami): texturas, sprites, pantallas.
-- [ ] Fase 5 — Audio: música, volumen dinámico, efectos de sonido.
-- [ ] Fase 6 — Pantallas de bienvenida/éxito/game over, pulido, playtesting, demo.
+- [x] Fase 3 — Enemigo: pathfinding BFS, vida del jugador con daño por contacto,
+      sprite billboard con z-buffer, estado normal/enfurecido (≤50% vida), IA
+      que se congela si la ves y pausa en cruces.
+- [x] Fase 4 — Sistemas y pantallas sin arte final: bienvenida (título "Not your
+      house" + selector de dificultad), cinemática de introducción, HUD de vida
+      en corazones, pantallas de game over/éxito, motor de audio (música con
+      volumen dinámico + SFX) — todo con placeholders donde eventualmente va
+      arte/audio real de Cami.
+- [ ] Fase 5 — 🎨🎵 Integración de arte y audio final de Cami (reemplazo de placeholders).
+- [ ] Fase 6 — Pulido, playtesting de balance, video de demo, entrega.
 
 ## Estructura
 

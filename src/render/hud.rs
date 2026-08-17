@@ -1,4 +1,4 @@
-//! HUD: contador de FPS (15 pts) y minimapa (10 pts).
+//! HUD: contador de FPS (15 pts), minimapa (10 pts) y vida en corazones.
 
 use sdl2::pixels::Color;
 use sdl2::rect::{Point, Rect};
@@ -8,12 +8,10 @@ use sdl2::video::{Window, WindowContext};
 
 use super::text::draw_text;
 use crate::engine::minimap;
-use crate::entities::player::Player;
+use crate::entities::player::{Player, MAX_LIFE};
 use crate::map::{BLOCK_GRID, BLOCK_SIZE};
 
 const FPS_COLOR: Color = Color::RGB(120, 230, 140);
-const LIFE_COLOR_OK: Color = Color::RGB(120, 230, 140);
-const LIFE_COLOR_LOW: Color = Color::RGB(235, 70, 70);
 const MINIMAP_BG: Color = Color::RGBA(12, 10, 14, 210);
 const MINIMAP_WALL: Color = Color::RGB(210, 200, 190);
 const MINIMAP_PLAYER: Color = Color::RGB(225, 60, 60);
@@ -54,18 +52,94 @@ impl FpsCounter {
     }
 }
 
-/// Vida del jugador, debajo del contador de FPS — cambia de color al cruzar el
-/// mismo umbral (≤50%) que dispara el estado "enfurecido" del enemigo, así se
-/// puede confirmar visualmente que el umbral dispara en el momento correcto.
-pub fn draw_life(
+// --- Corazones de vida (ver SKILL.md, "Vida del jugador — corazones") -----
+//
+// Pixel art crudo a propósito, definido por código (bitmap 7x7 booleano,
+// mismo espíritu que un bitmap font) en vez de un PNG — no hace falta arte de
+// Cami para esto y funciona como estilo final, no solo placeholder.
+
+const HEART_W: usize = 7;
+const HEART_H: usize = 7;
+const HEART_CELL_PX: i32 = 5;
+const HEART_GAP_PX: i32 = 8;
+const HEARTS_TOTAL: u32 = 5;
+const LIFE_PER_HEART: f64 = MAX_LIFE / HEARTS_TOTAL as f64;
+
+const HEART_COLOR_FULL: Color = Color::RGB(200, 30, 55);
+const HEART_COLOR_CRACKED: Color = Color::RGB(120, 40, 40);
+
+#[rustfmt::skip]
+const HEART_FULL: [[u8; HEART_W]; HEART_H] = [
+    [0,1,1,0,1,1,0],
+    [1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1],
+    [0,1,1,1,1,1,0],
+    [0,0,1,1,1,0,0],
+    [0,0,0,1,0,0,0],
+];
+
+// Mismo contorno que HEART_FULL pero con una grieta tallada — se usa cuando al
+// corazón le queda menos de la mitad de sus puntos de vida.
+#[rustfmt::skip]
+const HEART_CRACKED: [[u8; HEART_W]; HEART_H] = [
+    [0,1,1,0,1,1,0],
+    [1,1,1,1,0,1,1],
+    [1,1,1,0,1,1,1],
+    [1,1,0,1,1,1,1],
+    [0,1,1,1,1,1,0],
+    [0,0,1,0,1,0,0],
+    [0,0,0,1,0,0,0],
+];
+
+fn draw_heart_bitmap(canvas: &mut Canvas<Window>, bitmap: &[[u8; HEART_W]; HEART_H], x: i32, y: i32, color: Color) {
+    draw_heart_icon(canvas, bitmap, x, y, HEART_CELL_PX, color);
+}
+
+/// Dibuja un corazón suelto (mismo bitmap que los de la vida) en cualquier
+/// posición/tamaño — usado, por ejemplo, junto al prompt de inicio de la
+/// pantalla de bienvenida.
+pub fn draw_heart_icon(
     canvas: &mut Canvas<Window>,
-    texture_creator: &TextureCreator<WindowContext>,
-    font: &Font,
-    player: &Player,
+    bitmap: &[[u8; HEART_W]; HEART_H],
+    x: i32,
+    y: i32,
+    cell_px: i32,
+    color: Color,
 ) {
-    let color = if player.life_below_half() { LIFE_COLOR_LOW } else { LIFE_COLOR_OK };
-    let text = format!("VIDA: {:.0}", player.life);
-    draw_text(canvas, texture_creator, font, &text, 10, 40, color);
+    canvas.set_draw_color(color);
+    for (row, cells) in bitmap.iter().enumerate() {
+        for (col, &on) in cells.iter().enumerate() {
+            if on == 0 {
+                continue;
+            }
+            let px = x + col as i32 * cell_px;
+            let py = y + row as i32 * cell_px;
+            let _ = canvas.fill_rect(Rect::new(px, py, cell_px as u32, cell_px as u32));
+        }
+    }
+}
+
+/// Vida del jugador como 5 corazones, debajo del contador de FPS. Cada corazón
+/// vale 20 de vida: entero mientras le quede más de la mitad de sus puntos,
+/// agrietado por debajo de la mitad, desaparece en 0. El umbral de
+/// "enfurecido" del enemigo (≤50% del total) es independiente de esto — pero
+/// coincide con que el 3er corazón (de 5) empiece a agrietarse, así que la
+/// lectura visual y el peligro real quedan alineados.
+pub fn draw_hearts(canvas: &mut Canvas<Window>, player: &Player, x: i32, y: i32) {
+    let heart_px_w = HEART_W as i32 * HEART_CELL_PX;
+    for i in 0..HEARTS_TOTAL {
+        let heart_life = (player.life - i as f64 * LIFE_PER_HEART).clamp(0.0, LIFE_PER_HEART);
+        if heart_life <= 0.0 {
+            continue;
+        }
+        let hx = x + i as i32 * (heart_px_w + HEART_GAP_PX);
+        if heart_life > LIFE_PER_HEART / 2.0 {
+            draw_heart_bitmap(canvas, &HEART_FULL, hx, y, HEART_COLOR_FULL);
+        } else {
+            draw_heart_bitmap(canvas, &HEART_CRACKED, hx, y, HEART_COLOR_CRACKED);
+        }
+    }
 }
 
 /// Dibuja el minimapa (paredes del grid + marcador de jugador con su orientación)
