@@ -1,31 +1,30 @@
-# Not your house
+# Proyecto 1
 
-Proyecto universitario (gráficas por computadora, parte 3): un ray caster estilo
-Wolfenstein 3D. Es tu aniversario. Erica, tu novia, ha estado actuando raro. Esta
-no es tu casa.
+Ray caster estilo Wolfenstein 3D 
 
-Ver [SKILL.md](SKILL.md) para el diseño completo (scope, mecánicas, guion narrativo,
-decisiones cerradas).
+## Tecnologías
 
-## Requisitos
+- **Rust**
+- **SDL2** — ventana, input (teclado + mouse) y render
+- **SDL2_image** — carga de texturas y fondos en PNG
+- **SDL2_ttf** — texto (HUD, títulos, menús)
+- **SDL2_mixer** — música de fondo y efectos de sonido
 
+## Cómo correr el proyecto
+
+Requisitos:
 - [Rust](https://rustup.rs/) (toolchain `stable-x86_64-pc-windows-msvc`)
-- Windows con Visual Studio Build Tools (para el linker de MSVC)
+- Windows con Visual Studio Build Tools (linker de MSVC)
 
-Las librerías de desarrollo de SDL2, SDL2_mixer y SDL2_ttf ya están incluidas en
-[`vendor/sdl2/`](vendor/sdl2/) (`.lib` para enlazar, `.dll` para ejecutar) —
-**no hace falta instalar SDL2 por separado**. [`build.rs`](build.rs) le indica al
-linker dónde están los `.lib` y copia los `.dll` a `target/debug/` (o `target/release/`)
-automáticamente en cada build, así que `cargo build` / `cargo run` funcionan directo
-tras clonar, sin `.dll` sueltos en la raíz del repo.
-
-## Cómo correr
+Las librerías de SDL2 ya vienen incluidas en [`vendor/sdl2/`](vendor/sdl2/)
+(`.lib` para enlazar, `.dll` para ejecutar) — no hace falta instalar SDL2 por
+separado. `cargo build` / `cargo run` funcionan directo tras clonar el repo.
 
 ```
 cargo run
 ```
 
-Para una build optimizada (recomendado para medir FPS reales):
+Build optimizada (recomendada para medir FPS reales):
 
 ```
 cargo run --release
@@ -47,27 +46,26 @@ cargo run --release
 | Tecla | Acción |
 |---|---|
 | 1 / 2 / 3 | Elegir dificultad (fácil/medio/difícil) en la bienvenida |
-| ENTER | Confirmar / iniciar |
-| R | Reintentar (pantalla de game over) |
+| ENTER | Confirmar / iniciar / volver al menú |
+| R | Reintentar o volver al menú |
 
-## Estado del proyecto
+## Objetivos cumplidos
 
-- [x] Fase 1 — Motor base: ventana SDL2, raycasting DDA (paredes tipo bloque,
-      estilo Wolfenstein), movimiento + colisión + rotación (teclado y mouse),
-      contador de FPS.
-- [x] Fase 2 — Mapa y minimapa: laberinto 10×10 en `src/map.rs` + minimapa en
-      la esquina superior derecha.
-- [x] Fase 3 — Enemigo: pathfinding BFS, vida del jugador con daño por contacto,
-      sprite billboard con z-buffer, estado normal/enfurecido (≤50% vida), IA
-      que se congela si la ves y pausa en cruces.
-- [x] Fase 4 — Sistemas y pantallas sin arte final: bienvenida (título "Not your
-      house" + selector de dificultad), cinemática de introducción, HUD de vida
-      en corazones, pantallas de game over/éxito, motor de audio (música con
-      volumen dinámico + SFX) — todo con placeholders donde eventualmente va
-      arte/audio real de Cami.
-- [ ] Fase 5 — 🎨🎵 Integración de arte y audio final de Cami (reemplazo de placeholders).
-- [ ] Fase 6 — Pulido, playtesting de balance, video de demo, entrega.
-
-## Estructura
-
-Ver la sección "Arquitectura sugerida" en [SKILL.md](SKILL.md).
+| Objetivo | Puntos | Estado |
+|---|---|---|
+| Laberinto propio, sin atravesar paredes, sin crashear | Base | ✅ |
+| Textura/color distinto por tipo de pared | Base | ✅ |
+| Estética del nivel | 0–30 | ✅ |
+| FPS visible en pantalla | 15 | ✅ |
+| Cámara: adelante/atrás + rotación (teclado) | 20 | ✅ |
+| Rotación con mouse (solo horizontal) | +10 | ✅ |
+| Minimapa en una esquina | 10 | ✅ |
+| Música de fondo | 5 | ✅ |
+| Efectos de sonido | 10 | ✅ |
+| Animación de sprite (2 estados) | 20 | ✅ |
+| Pantalla de bienvenida | 5 | ✅ |
+| Pantalla de éxito | 10 | ✅ |
+| Hardware distinto a computadora tradicional | 0–50 | ❌ No implementado |
+| Soporte de control/gamepad | +20 | ❌ No implementado |
+| Selección de múltiples niveles | +10 | ❌ No implementado (hay selector de dificultad sobre el mismo mapa, no niveles distintos) |
+| Música de Taylor Swift | +5 | ❌ No implementado |
