@@ -24,9 +24,9 @@ impl Difficulty {
     /// `entities::enemy::PATHFIND_RECALC_FRAMES` para el valor base.
     pub fn pathfind_recalc_frames(self) -> u32 {
         match self {
-            Difficulty::Easy => 22,
-            Difficulty::Medium => 18,
-            Difficulty::Hard => 10,
+            Difficulty::Easy => 16,
+            Difficulty::Medium => 12,
+            Difficulty::Hard => 6,
         }
     }
 

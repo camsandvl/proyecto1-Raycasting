@@ -7,12 +7,14 @@
 //! Dos reglas de comportamiento (inspiradas en Weeping Angels/SCP-173 y en el
 //! Nemesis asomándose por una puerta) hacen que la persecución se sienta más
 //! amenazante que un simple "camina en línea recta hacia vos":
-//! - **Se congela si lo estás mirando** (mismo cono de FOV + línea de vista que
-//!   se renderiza en pantalla): solo avanza cuando le das la espalda.
-//! - **Pausa al llegar a un cruce real** (3+ salidas): un segundo "decidiendo"
-//!   antes de comprometerse a un pasillo, como si estuviera olfateando.
-//! Combinadas, producen el efecto de "se asoma y se queda quieto mirándote" en
-//! los cruces sin necesidad de programar esa escena a mano.
+//! - **Da un paso corto cada `GAZE_STEP_INTERVAL` segundos si la estás
+//!   mirando** (mismo cono de FOV + línea de vista que se renderiza en
+//!   pantalla), en vez de deslizarse sin parar — se queda quieta entre pasos
+//!   y "scoochea" hacia el jugador a los tirones. Mirar hacia otro lado es lo
+//!   que la deja avanzar a velocidad normal, sin pasos ni pausas.
+//! - **Pausa al llegar a un cruce real** (3+ salidas, solo cuando NO la están
+//!   mirando): un segundo "decidiendo" antes de comprometerse a un pasillo,
+//!   como si estuviera olfateando.
 
 use std::collections::VecDeque;
 
@@ -21,25 +23,34 @@ use crate::entities::player::Player;
 use crate::map::{Map, BLOCK_SIZE};
 
 pub const ENEMY_RADIUS: f64 = 0.25;
-/// Un poco más lento que el jugador (2.6 celdas/seg) — si fuera igual o más
-/// rápido sería imposible perderlo por los loops del laberinto.
-pub const ENEMY_SPEED: f64 = 1.9;
+/// Todavía más lento que el jugador (2.6 celdas/seg) — si fuera igual o más
+/// rápido sería imposible perderlo por los loops del laberinto — pero cerca
+/// del límite a propósito, para que la persecución se sienta intensa.
+pub const ENEMY_SPEED: f64 = 2.15;
+
+/// Mientras el jugador la está mirando (ver `frozen_by_gaze` en `update`) ya
+/// no se congela del todo, pero tampoco se desliza sin parar: cada
+/// `GAZE_STEP_INTERVAL` segundos da un solo paso corto de `GAZE_STEP_DISTANCE`
+/// hacia el jugador y se vuelve a quedar quieta — un "scoocheo" a los
+/// tirones en vez de un deslizamiento continuo.
+const GAZE_STEP_INTERVAL: f64 = 0.6;
+const GAZE_STEP_DISTANCE: f64 = 0.16;
 
 /// Distancia bajo la cual el enemigo está "en contacto" y hace daño.
 pub const CONTACT_RANGE: f64 = 0.55;
 pub const DAMAGE_PER_SECOND: f64 = 28.0;
 
-/// Cada cuántos frames se recalcula el campo de distancias BFS. Ver SKILL.md:
-/// "recalculado cada N frames (ej. cada 15-20 frames)". Difícil puede pedir un
-/// valor más bajo (ej. 10) más adelante — parámetro pensado para eso.
-pub const PATHFIND_RECALC_FRAMES: u32 = 18;
+/// Cada cuántos frames se recalcula el campo de distancias BFS por defecto —
+/// el valor real usado en juego viene de `Difficulty::pathfind_recalc_frames`,
+/// este solo se usa para forzar un primer recálculo apenas arranca la partida.
+pub const PATHFIND_RECALC_FRAMES: u32 = 12;
 
 /// Ciclo de 2 "frames" de animación (parpadeo leve) para que el cambio de
 /// estado se lea inequívocamente como animación (ver SKILL.md).
 const ANIM_INTERVAL_SECS: f64 = 0.35;
 
 /// Cuánto se queda quieto "decidiendo" al llegar a un cruce con 3+ salidas.
-const JUNCTION_PAUSE_SECS: f64 = 1.2;
+const JUNCTION_PAUSE_SECS: f64 = 0.7;
 
 const UNREACHABLE: u32 = u32::MAX;
 
@@ -58,6 +69,10 @@ pub struct Enemy {
     anim_flip: bool,
     /// Tiempo restante de la pausa "decidiendo" en un cruce (ver JUNCTION_PAUSE_SECS).
     pause_timer: f64,
+    /// Cuenta regresiva hasta el próximo paso mientras la observan (ver
+    /// GAZE_STEP_INTERVAL) — arranca en 0 para que el primer paso sea casi
+    /// inmediato la primera vez que el jugador la ve.
+    gaze_step_timer: f64,
     /// ¿Estaba parado en un cruce el frame pasado? Para detectar la llegada
     /// (transición) y no reiniciar la pausa cada frame mientras sigue ahí.
     was_at_junction: bool,
@@ -77,6 +92,7 @@ impl Enemy {
             anim_timer: 0.0,
             anim_flip: false,
             pause_timer: 0.0,
+            gaze_step_timer: 0.0,
             was_at_junction: false,
             frozen_by_gaze: false,
         }
@@ -119,11 +135,22 @@ impl Enemy {
         }
 
         // Regla 1: si el jugador lo puede ver ahora mismo (mismo cono de FOV +
-        // línea de vista que se renderiza en pantalla), se queda inmóvil —
-        // mirar hacia otro lado es lo único que le permite seguir avanzando.
+        // línea de vista que se renderiza en pantalla), ya no se congela del
+        // todo — cada GAZE_STEP_INTERVAL segundos da un paso corto y se
+        // vuelve a quedar quieta. Mirar hacia otro lado es lo que la deja
+        // avanzar a velocidad normal, sin pasos ni pausas.
         self.frozen_by_gaze = camera::is_within_fov(player, self.x, self.y)
             && raycasting::has_line_of_sight(player.x, player.y, self.x, self.y);
         if self.frozen_by_gaze {
+            self.gaze_step_timer -= dt;
+            if self.gaze_step_timer <= 0.0 {
+                self.gaze_step_timer = GAZE_STEP_INTERVAL;
+                // Le pasamos la distancia del paso como si fuera "dt" y
+                // speed=1.0 — step_towards_player calcula internamente
+                // `speed * dt`, así que esto le da directamente
+                // GAZE_STEP_DISTANCE en vez de una velocidad continua.
+                self.step_towards_player(GAZE_STEP_DISTANCE, 1.0);
+            }
             return;
         }
 
@@ -142,7 +169,7 @@ impl Enemy {
             return;
         }
 
-        self.step_towards_player(dt);
+        self.step_towards_player(dt, ENEMY_SPEED);
     }
 
     /// BFS desde la celda del jugador: genera un campo de distancias sobre
@@ -185,8 +212,11 @@ impl Enemy {
     }
 
     /// Se mueve hacia la celda vecina abierta con menor distancia del campo
-    /// BFS (el "cuesta abajo" hacia el jugador).
-    fn step_towards_player(&mut self, dt: f64) {
+    /// BFS (el "cuesta abajo" hacia el jugador). `speed`/`dt` normalmente son
+    /// `ENEMY_SPEED`/el delta real del frame; mientras la observan se llama
+    /// con `speed=1.0` y `dt=GAZE_STEP_DISTANCE` para dar un paso de tamaño
+    /// fijo en vez de una velocidad continua (ver `update`).
+    fn step_towards_player(&mut self, dt: f64, speed: f64) {
         let row = (self.y as usize).min(BLOCK_SIZE - 1);
         let col = (self.x as usize).min(BLOCK_SIZE - 1);
 
@@ -212,7 +242,7 @@ impl Enemy {
             return;
         }
 
-        let step = (ENEMY_SPEED * dt).min(dist);
+        let step = (speed * dt).min(dist);
         self.try_move(dx / dist * step, dy / dist * step);
     }
 
