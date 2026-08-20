@@ -1,6 +1,6 @@
 //! Cinemática de introducción: fondo estático del cuarto (dibujo de Cami,
 //! `assets/ui/intro_backdrop.png` — incluye la figura oscura ya dibujada
-//! dentro de la ilustración, no se anima por código) + 4 líneas de texto
+//! dentro de la ilustración, no se anima por código) + 3 líneas de texto
 //! secuenciales encima. Sin video real — ver nota técnica en SKILL.md ("por
 //! qué no hay video real").
 
@@ -12,16 +12,15 @@ use sdl2::video::{Window, WindowContext};
 
 use crate::render::text::draw_text_centered;
 
-const LINES: [&str; 4] = [
+const LINES: [&str; 3] = [
     "It's your anniversary!",
     "Your girlfriend Erica has been acting weird lately...",
-    "This is not your house.",
     "Happy anniversary.",
 ];
 
 const LINE_DURATION: f64 = 2.6;
 const FADE_DURATION: f64 = 0.5;
-pub const TOTAL_DURATION: f64 = LINE_DURATION * LINES.len() as f64;
+const TOTAL_DURATION: f64 = LINE_DURATION * LINES.len() as f64;
 
 pub struct IntroState {
     elapsed: f64,
