@@ -1,31 +1,46 @@
 //! Sprite billboard del enemigo: siempre de cara a la cámara, escalado por
 //! distancia, ocluido correctamente detrás de paredes más cercanas vía
-//! z-buffer (ver render::walls::render_scene). Placeholder mientras llega el
-//! arte de Cami (Fase 4): silueta procedural cabeza+cuerpo en vez de un
-//! rectángulo plano, para que ya se lea como una figura.
+//! z-buffer (ver render::walls::render_scene). `assets/sprites/enemy/normal.png`
+//! (dibujo de Cami, 900×1600, fondo transparente) es hoy el único estado
+//! entregado — el estado `Enraged` reusa la misma imagen con un tinte rojizo
+//! (`Texture::set_color_mod`, misma técnica que las paredes) hasta que llegue
+//! un dibujo dedicado para ese estado.
+//!
+//! Igual que las paredes, cada columna copia una tira de 1px de ancho de la
+//! textura escalada por GPU — pero acá además hay que recortar verticalmente
+//! sin distorsionar cuando el sprite queda más alto que la pantalla (de cerca
+//! sobra por arriba/abajo): el rect de origen se recorta a la MISMA fracción
+//! vertical que quedó visible en pantalla, en vez de copiar la imagen entera
+//! aplastada al espacio recortado.
 
-use sdl2::pixels::Color;
 use sdl2::rect::Rect;
-use sdl2::render::Canvas;
+use sdl2::render::{BlendMode, Canvas, Texture};
 use sdl2::video::Window;
 
 use crate::engine::camera::camera_view;
 use crate::entities::enemy::{Enemy, EnemyState};
 use crate::entities::player::Player;
 
-const NORMAL_COLOR: (u8, u8, u8) = (95, 35, 35);
-const ENRAGED_COLOR: (u8, u8, u8) = (215, 25, 25);
+/// Ancho/alto de `normal.png` (800×1400) — si se reemplaza el arte por uno
+/// con otra proporción, actualizar este número para que no quede
+/// estirado/achatado.
+const SPRITE_ASPECT: f64 = 800.0 / 1400.0;
 
-// Proporciones de la silueta placeholder (ver `column_span`).
-const SPRITE_ASPECT: f64 = 0.55; // ancho / alto
-const HEAD_HEIGHT_FRACTION: f64 = 0.3;
-const HEAD_WIDTH_FRACTION: f64 = 0.42;
-const SHOULDER_TRIM: f64 = 0.08;
+/// Erica, como persona, no debería medir lo mismo que una pared/techo entero
+/// — sin esto queda gigante y "flotando" (la cabeza le llega hasta el techo a
+/// cualquier distancia, lo que se ve antinatural aunque los pies estén bien
+/// apoyados). Fracción de la altura "de pared completa" que ocupa de verdad;
+/// bajar este número la hace más chica/humana, subirlo más grande.
+const SPRITE_HEIGHT_SCALE: f64 = 0.8;
+
+const ENRAGED_TINT: (u8, u8, u8) = (255, 90, 90); // tinte rojizo, mismo lenguaje que el resto del juego.
 
 /// Dibuja al enemigo como billboard 2D en espacio de pantalla. `z_buffer` debe
 /// venir de haber llamado `render::walls::render_scene` este mismo frame.
+#[allow(clippy::too_many_arguments)]
 pub fn render_enemy(
     canvas: &mut Canvas<Window>,
+    texture: &mut Texture,
     player: &Player,
     enemy: &Enemy,
     state: EnemyState,
@@ -59,33 +74,60 @@ pub fn render_enemy(
 
     let sprite_screen_x = (w as f64 / 2.0) * (1.0 + transform_x / transform_y);
 
-    let sprite_h = (h as f64 / transform_y).abs();
+    // Altura de una pared completa a esta distancia (misma fórmula que
+    // render::walls) — de ahí sale dónde cae el piso en pantalla a esta
+    // distancia, NO la altura real de Erica (ver SPRITE_HEIGHT_SCALE).
+    let full_wall_h = (h as f64 / transform_y).abs();
+    let floor_y_f = h as f64 / 2.0 + full_wall_h / 2.0;
+
+    let sprite_h = full_wall_h * SPRITE_HEIGHT_SCALE;
     let sprite_w = sprite_h * SPRITE_ASPECT;
 
-    let draw_start_y = (-sprite_h / 2.0 + h as f64 / 2.0).max(0.0) as i32;
-    let draw_end_y = (sprite_h / 2.0 + h as f64 / 2.0).min((h - 1) as f64) as i32;
-    let draw_start_x = (sprite_screen_x - sprite_w / 2.0).max(0.0) as i32;
-    let draw_end_x = (sprite_screen_x + sprite_w / 2.0).min((w - 1) as f64) as i32;
+    // Bordes SIN recortar del sprite — se usan para calcular qué fracción de
+    // la textura corresponde a la porción visible (ver comentario del
+    // módulo). `draw_start_*`/`draw_end_*` son la versión ya recortada a la
+    // pantalla, la que efectivamente se dibuja. El borde de ABAJO queda fijo
+    // en `floor_y_f` (el piso a esta distancia) y el sprite crece hacia
+    // arriba desde ahí — así los pies quedan apoyados sin importar
+    // `SPRITE_HEIGHT_SCALE`, en vez de encogerse parejo desde el centro.
+    let sprite_top_f = floor_y_f - sprite_h;
+    let sprite_left_f = sprite_screen_x - sprite_w / 2.0;
+
+    let draw_start_y = sprite_top_f.max(0.0) as i32;
+    let draw_end_y = floor_y_f.min((h - 1) as f64) as i32;
+    let draw_start_x = sprite_left_f.max(0.0) as i32;
+    let draw_end_x = (sprite_left_f + sprite_w).min((w - 1) as f64) as i32;
 
     if draw_start_x >= draw_end_x || draw_start_y >= draw_end_y {
         return;
     }
 
-    let base = match state {
-        EnemyState::Normal => NORMAL_COLOR,
-        EnemyState::Enraged => ENRAGED_COLOR,
-    };
+    let tex_query = texture.query();
+    let tex_w = tex_query.width as i32;
+    let tex_h = tex_query.height as i32;
+
     // Parpadeo leve de 2 frames (ver SKILL.md: "para que la animación sea
-    // inequívoca... dar a cada estado un ciclo de 2 frames alternados").
+    // inequívoca... dar a cada estado un ciclo de 2 frames alternados") +
+    // niebla por distancia, igual criterio que las paredes.
     let flicker = if anim_flip { 1.0 } else { 0.82 };
     let fog = (1.0 - (transform_y / 14.0).min(0.5)).max(0.5);
     let factor = flicker * fog;
-    let color =
-        Color::RGB((base.0 as f64 * factor) as u8, (base.1 as f64 * factor) as u8, (base.2 as f64 * factor) as u8);
-    canvas.set_draw_color(color);
+    let (tint_r, tint_g, tint_b) = match state {
+        EnemyState::Normal => (255.0, 255.0, 255.0),
+        EnemyState::Enraged => (ENRAGED_TINT.0 as f64, ENRAGED_TINT.1 as f64, ENRAGED_TINT.2 as f64),
+    };
+    let shade = |v: f64| ((v * factor).clamp(0.0, 255.0)) as u8;
+    texture.set_color_mod(shade(tint_r), shade(tint_g), shade(tint_b));
+    canvas.set_blend_mode(BlendMode::Blend); // respeta el canal alfa del PNG.
 
-    let head_split_y = draw_start_y + ((draw_end_y - draw_start_y) as f64 * HEAD_HEIGHT_FRACTION) as i32;
-    let sprite_span = (draw_end_x - draw_start_x).max(1) as f64;
+    // Franja vertical visible, como fracción 0.0-1.0 del sprite completo —
+    // recorta la textura de origen a la misma fracción en vez de aplastar la
+    // imagen entera al espacio ya recortado (lo que la distorsionaría).
+    let v_top = ((draw_start_y as f64 - sprite_top_f) / sprite_h).clamp(0.0, 1.0);
+    let v_bottom = ((draw_end_y as f64 - sprite_top_f) / sprite_h).clamp(0.0, 1.0);
+    let src_y = (v_top * tex_h as f64) as i32;
+    let src_h = (((v_bottom - v_top) * tex_h as f64).max(1.0)) as u32;
+    let dest_h = (draw_end_y - draw_start_y).max(1) as u32;
 
     for x in draw_start_x..draw_end_x {
         if x < 0 || x >= w {
@@ -96,16 +138,10 @@ pub fn render_enemy(
             continue;
         }
 
-        let u = (x - draw_start_x) as f64 / sprite_span; // 0..1 a través del sprite
-        let centered = (u - 0.5).abs();
-
-        // Torso/piernas: columna central con los hombros levemente recortados.
-        if centered <= 0.5 - SHOULDER_TRIM {
-            let _ = canvas.fill_rect(Rect::new(x, head_split_y, 1, (draw_end_y - head_split_y).max(1) as u32));
-        }
-        // Cabeza: solo la franja central angosta, arriba del todo.
-        if centered <= HEAD_WIDTH_FRACTION / 2.0 {
-            let _ = canvas.fill_rect(Rect::new(x, draw_start_y, 1, (head_split_y - draw_start_y).max(1) as u32));
-        }
+        let u = ((x as f64 - sprite_left_f) / sprite_w).clamp(0.0, 1.0);
+        let src_x = ((u * tex_w as f64) as i32).clamp(0, tex_w - 1);
+        let src = Rect::new(src_x, src_y, 1, src_h);
+        let dest = Rect::new(x, draw_start_y, 1, dest_h);
+        let _ = canvas.copy(texture, Some(src), Some(dest));
     }
 }
