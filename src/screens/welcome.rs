@@ -93,22 +93,16 @@ impl WelcomeState {
         texture_creator: &TextureCreator<WindowContext>,
         title_font: &Font,
         ui_font: &Font,
-        title_background: &Texture,
-        difficulty_background: &Texture,
+        background: &Texture,
         w: i32,
         h: i32,
     ) {
         canvas.set_blend_mode(BlendMode::Blend);
+        let _ = canvas.copy(background, None, Some(Rect::new(0, 0, w as u32, h as u32)));
 
         match self.stage {
-            Stage::Title => {
-                let _ = canvas.copy(title_background, None, Some(Rect::new(0, 0, w as u32, h as u32)));
-                self.draw_title_stage(canvas, texture_creator, title_font, ui_font, w, h);
-            }
-            Stage::Difficulty => {
-                let _ = canvas.copy(difficulty_background, None, Some(Rect::new(0, 0, w as u32, h as u32)));
-                self.draw_difficulty_stage(canvas, texture_creator, ui_font, w, h);
-            }
+            Stage::Title => self.draw_title_stage(canvas, texture_creator, title_font, ui_font, w, h),
+            Stage::Difficulty => self.draw_difficulty_stage(canvas, texture_creator, ui_font, w, h),
         }
     }
 

@@ -63,6 +63,7 @@ pub fn draw_text_centered(
 /// Igual que `draw_text_centered` pero encogido/agrandado uniformemente por
 /// `scale` (1.0 = tamaño normal de la fuente) — para textos secundarios que
 /// necesitan verse más chicos que el resto sin cargar una fuente aparte.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_text_centered_scaled(
     canvas: &mut Canvas<Window>,
     texture_creator: &TextureCreator<WindowContext>,
@@ -106,6 +107,7 @@ pub fn measure_text(font: &Font, text: &str) -> (u32, u32) {
 /// cualquier fuente sirve con esta técnica porque solo se altera el rect de
 /// destino, no la fuente en sí.
 /// Devuelve el alto final dibujado (útil para posicionar lo que va debajo).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_title_stretched(
     canvas: &mut Canvas<Window>,
     texture_creator: &TextureCreator<WindowContext>,

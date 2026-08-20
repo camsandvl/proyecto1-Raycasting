@@ -47,7 +47,7 @@ impl Player {
         self.life <= 0.0
     }
 
-    pub fn life_fraction(&self) -> f64 {
+    fn life_fraction(&self) -> f64 {
         (self.life / MAX_LIFE).clamp(0.0, 1.0)
     }
 

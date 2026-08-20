@@ -97,9 +97,8 @@ fn draw_heart_bitmap(canvas: &mut Canvas<Window>, bitmap: &[[u8; HEART_W]; HEART
 }
 
 /// Dibuja un corazón suelto (mismo bitmap que los de la vida) en cualquier
-/// posición/tamaño — usado, por ejemplo, junto al prompt de inicio de la
-/// pantalla de bienvenida.
-pub fn draw_heart_icon(
+/// posición/tamaño y color — lo que varía de corazón a corazón en `draw_hearts`.
+fn draw_heart_icon(
     canvas: &mut Canvas<Window>,
     bitmap: &[[u8; HEART_W]; HEART_H],
     x: i32,
