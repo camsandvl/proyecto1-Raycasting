@@ -164,6 +164,13 @@ fn main() -> Result<(), String> {
         .load_texture("assets/ui/jumpscare_face.png")
         .map_err(|e| e.to_string())?;
 
+    // Sprite billboard del enemigo — dibujo de Cami. Único estado entregado
+    // por ahora; `Enraged` reusa esta misma textura con un tinte rojizo (ver
+    // render::sprites).
+    let mut enemy_sprite = texture_creator
+        .load_texture("assets/sprites/enemy/normal.png")
+        .map_err(|e| e.to_string())?;
+
     // Buffer + textura reutilizados cada frame para el floor-casting por píxel
     // (ver render::walls::render_floor) — evita reasignar memoria cada frame.
     let floor_h = SCREEN_HEIGHT / 2;
@@ -260,12 +267,14 @@ fn main() -> Result<(), String> {
                 if welcome.handle_keydowns(&keydowns) {
                     run = RunState::new(welcome.difficulty);
                     intro = IntroState::new();
+                    // La música arranca acá, no al empezar el gameplay — así
+                    // ya está sonando durante la cinemática de introducción.
+                    audio_engine.start_run();
                     screen = Screen::Intro;
                 }
             }
             Screen::Intro => {
                 if intro.update(dt) {
-                    audio_engine.start_run();
                     screen = Screen::Playing;
                 }
             }
@@ -275,12 +284,14 @@ fn main() -> Result<(), String> {
             Screen::GameOver => {
                 game_over.update(dt);
                 if keydowns.contains(&Scancode::R) {
+                    audio_engine.stop_run();
                     screen = Screen::Welcome;
                 }
             }
             Screen::Success => {
                 success.update(dt);
                 if keydowns.contains(&Scancode::Return) || keydowns.contains(&Scancode::R) {
+                    audio_engine.stop_run();
                     screen = Screen::Welcome;
                 }
             }
@@ -292,7 +303,7 @@ fn main() -> Result<(), String> {
 
         match screen {
             Screen::Welcome => {
-                welcome.draw(&mut canvas, &texture_creator, &title_font, &ui_font, &title_background, &title_background, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
+                welcome.draw(&mut canvas, &texture_creator, &title_font, &ui_font, &title_background, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
             }
             Screen::Intro => {
                 intro.draw(&mut canvas, &texture_creator, &body_font, &intro_backdrop, SCREEN_WIDTH as i32, SCREEN_HEIGHT as i32);
@@ -308,17 +319,19 @@ fn main() -> Result<(), String> {
                     &floor_tex,
                     &mut normal_wall_textures,
                     &mut drip_wall_texture,
+                    &mut enemy_sprite,
                     &mut z_buffer,
                     &run,
                     &fps_counter,
                 );
+                // La música sigue sonando sin cortes hacia la pantalla de
+                // game over o éxito (antes se cortaba acá) — recién se corta
+                // al volver a Welcome, ver más abajo.
                 if run.player.is_dead() {
                     game_over = GameOverState::new();
-                    audio_engine.stop_run();
                     screen = Screen::GameOver;
                 } else if run.survival_elapsed >= run.difficulty.survival_seconds() {
                     success = SuccessState::new();
-                    audio_engine.stop_run();
                     screen = Screen::Success;
                 }
             }
@@ -356,7 +369,7 @@ fn update_playing(run: &mut RunState, event_pump: &sdl2::EventPump, audio_engine
     run.player.update_danger_flash(dt, in_contact);
 
     let moving = keyboard_state.is_scancode_pressed(Scancode::W) || keyboard_state.is_scancode_pressed(Scancode::S);
-    audio_engine.update(dt, moving, distance_to_enemy, in_contact);
+    audio_engine.update(dt, moving);
 
     // Primera vez que Erica entra en el campo de visión del jugador: dispara
     // el aviso tutorial (ver ERICA_LABEL_TEXT). Reutiliza el mismo chequeo de
@@ -387,6 +400,7 @@ fn draw_playing<'t>(
     floor_tex: &render::walls::PixelTexture,
     normal_wall_textures: &mut [Texture<'t>],
     drip_wall_texture: &mut Texture<'t>,
+    enemy_sprite: &mut Texture,
     z_buffer: &mut [f64],
     run: &RunState,
     fps_counter: &FpsCounter,
@@ -405,6 +419,7 @@ fn draw_playing<'t>(
     );
     render::sprites::render_enemy(
         canvas,
+        enemy_sprite,
         &run.player,
         &run.enemy,
         Enemy::state(&run.player),
